@@ -32,7 +32,7 @@ constexpr uint8_t MAGIC_BYTES[4] = {'D', 'L', 'C', 0x02};
 constexpr uint8_t FOOTER_MAGIC[4] = {0xED, 0xDC, 0xBA, 0x01};
 constexpr uint16_t VERSION_MAJOR = 0;
 constexpr uint16_t VERSION_MINOR = 1;
-constexpr uint16_t DEFAULT_PRECISION = 12;
+constexpr uint16_t DEFAULT_PRECISION = 16;
 constexpr uint32_t DEFAULT_CHUNK_SIZE = 100000;
 
 // ── Header (64 bytes, packed) ───────────────────────────────────────────────
@@ -94,6 +94,9 @@ struct DLCConfig {
   int precision_bits = DEFAULT_PRECISION;
   int chunk_size = DEFAULT_CHUNK_SIZE;
   int num_workers = 0; // 0 = auto
+  // When false, skips the 16-bit error-bound floor (ablation / 8–20 sweep).
+  bool enforce_error_bound = true;
+  double max_error_bound = 8e-6;
 };
 
 // ── Serialization Functions ─────────────────────────────────────────────────

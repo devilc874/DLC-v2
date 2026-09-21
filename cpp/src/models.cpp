@@ -197,7 +197,8 @@ ModelResult fit_constant(const double *y, size_t n) {
 
 // ── Model 4: Sinusoidal ────────────────────────────────────────── NEW ────
 
-// Simple O(n) DFT for dominant frequency (no FFTW dependency)
+// Direct DFT magnitude search: O(n^2). Seeds Sinusoidal only (n <= 4096).
+// Python twin uses O(n log n) FFT via numpy; both only need the peak bin.
 static double dominant_frequency(const double *y, size_t n) {
   if (n < 4)
     return 0.0;

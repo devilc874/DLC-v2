@@ -42,7 +42,18 @@ std::vector<double> dequantize(const std::vector<int64_t> &quantized,
 
 // ── Adaptive Precision ──────────────────────────────────────────────────────
 
-int select_precision(const std::vector<double> &residuals, int requested) {
+int precision_floor_for_error_bound(double max_error_bound) {
+  // Bits required for quantization error 2^(-(p+1)) <= max_error_bound.
+  // Default 8e-6 → 16 bits (production floor).
+  if (max_error_bound <= 0.0)
+    return 20;
+  return std::max(8, static_cast<int>(std::ceil(std::log2(1.0 / max_error_bound) - 1)));
+}
+
+int select_precision(const std::vector<double> &residuals, int requested,
+                     bool enforce_error_bound, double max_error_bound) {
+  // p* = min(20, max(p_floor, min(p_req, p_adapt)))
+  // Default: p_floor=16. Ablation (--ablation-precision): p_floor=8.
   if (residuals.empty())
     return requested;
 
@@ -54,17 +65,18 @@ int select_precision(const std::vector<double> &residuals, int requested) {
   }
 
   if (max_abs < 1e-15)
-    return 8; // MIN_PRECISION
+    return 8; // near-zero residuals → fewest bits
 
   int min_p_for_bound =
-      std::max(8, static_cast<int>(std::ceil(std::log2(1.0 / 8e-6) - 1)));
+      enforce_error_bound ? precision_floor_for_error_bound(max_error_bound) : 8;
 
-  int adaptive_p = requested;
+  int adaptive_p = std::max(requested, 12);
   if (max_abs < 1.0) {
     adaptive_p = std::max(
         8, static_cast<int>(std::ceil(-std::log2(max_abs + 1e-30))) + 4);
   }
 
+  requested = std::max(8, std::min(20, requested));
   int precision =
       std::min(20, std::max(min_p_for_bound, std::min(requested, adaptive_p)));
   return precision;

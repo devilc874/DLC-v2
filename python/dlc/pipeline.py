@@ -32,7 +32,10 @@ from dlc.format import (
 )
 
 
-def _process_block(block: np.ndarray, precision_bits: int = 12) -> bytes:
+def _process_block(block: np.ndarray,
+                   precision_bits: int = 16,
+                   enforce_error_bound: bool = True,
+                   max_error_bound: float = 8e-6) -> bytes:
     """
     Process a single block (runs entirely within one thread):
       1. Segment into windows
@@ -74,9 +77,12 @@ def _process_block(block: np.ndarray, precision_bits: int = 12) -> bytes:
             parts.append(pack_window_block(meta, encoded_data))
 
         else:
-            # Analytical models (Linear, Quadratic, Constant, Sinusoidal)
-            # Adaptive precision for this window
-            effective_precision = select_precision(residuals, precision_bits)
+            # Analytical models — adaptive precision (floor 16 by default)
+            effective_precision = select_precision(
+                residuals, precision_bits,
+                enforce_error_bound=enforce_error_bound,
+                max_error_bound=max_error_bound,
+            )
             quantized = quantize(residuals, effective_precision)
             encoding_id, encoded_data = trial_encode(quantized)
 
@@ -92,16 +98,16 @@ def _process_block(block: np.ndarray, precision_bits: int = 12) -> bytes:
     windowed_result = b''.join(parts)
 
     # ── Block-level DoD fast path ─────────────────────────────────────
-    # Try encoding the entire block as a single Constant(mean) window
-    # with DoD (encoding 5). This eliminates per-window overhead and
-    # directly competes with standalone DoD compression.
-    # Key: subtract block mean first so residuals are small → better varint
     if len(block) >= 64:
         try:
             from dlc.encoders import encode_dod
             block_mean = float(np.mean(block))
             block_residuals = block - block_mean
-            block_precision = select_precision(block_residuals, precision_bits)
+            block_precision = select_precision(
+                block_residuals, precision_bits,
+                enforce_error_bound=enforce_error_bound,
+                max_error_bound=max_error_bound,
+            )
             block_quantized = quantize(block_residuals, block_precision)
             dod_encoded = encode_dod(block_quantized)
 
@@ -114,7 +120,6 @@ def _process_block(block: np.ndarray, precision_bits: int = 12) -> bytes:
             )
             dod_result = pack_window_block(dod_meta, dod_encoded)
 
-            # Pick the smaller representation
             if len(dod_result) < len(windowed_result):
                 return dod_result
         except Exception:
@@ -124,14 +129,16 @@ def _process_block(block: np.ndarray, precision_bits: int = 12) -> bytes:
 
 
 def compress_parallel(data: np.ndarray,
-                      precision_bits: int = 12,
+                      precision_bits: int = 16,
                       chunk_size: int = 100_000,
-                      num_workers: Optional[int] = None) -> bytes:
+                      num_workers: Optional[int] = None,
+                      enforce_error_bound: bool = True,
+                      max_error_bound: float = 8e-6) -> bytes:
     """
     Compress an array of float64s into the uncompressed payload.
 
-    Dispatches blocks to a thread pool, assembles in strict order
-    for deterministic output regardless of thread count.
+    Default: 16-bit error-bound floor with adaptive selection up to precision_bits.
+    Set enforce_error_bound=False (--ablation-precision) for full 8–20 adaptation.
     """
     n = len(data)
     if n == 0:
@@ -149,7 +156,10 @@ def compress_parallel(data: np.ndarray,
 
     with ThreadPoolExecutor(max_workers=num_workers) as pool:
         futures = [
-            pool.submit(_process_block, block, precision_bits)
+            pool.submit(
+                _process_block, block, precision_bits,
+                enforce_error_bound, max_error_bound,
+            )
             for block in blocks
         ]
         ordered_payloads = [f.result() for f in futures]

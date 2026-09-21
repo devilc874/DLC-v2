@@ -18,8 +18,13 @@
 static void print_usage() {
   std::cerr << "Usage:\n"
             << "  dlc compress   -i <input.bin> -o <output.dlc> [--precision "
-               "N] [--chunk-size N] [--workers N]\n"
-            << "  dlc decompress -i <input.dlc> -o <output.bin>\n";
+               "N] [--chunk-size N] [--workers N] [--ablation-precision]\n"
+            << "  dlc decompress -i <input.dlc> -o <output.bin>\n"
+            << "\n"
+            << "  --precision N          Requested precision cap (8–20, default 16).\n"
+            << "                         Windows still adapt above the floor up to N.\n"
+            << "  --ablation-precision   Disable the 16-bit error-bound floor so\n"
+            << "                         precision can adapt over the full 8–20 range.\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -30,9 +35,10 @@ int main(int argc, char *argv[]) {
 
   std::string command = argv[1];
   std::string input_path, output_path;
-  int precision = 12;
+  int precision = 16; // paper default
   uint32_t chunk_size = 100000;
   int workers = 0;
+  bool ablation_precision = false;
 
   // Parse arguments
   for (int i = 2; i < argc; ++i) {
@@ -46,6 +52,8 @@ int main(int argc, char *argv[]) {
       chunk_size = static_cast<uint32_t>(std::stoul(argv[++i]));
     } else if ((std::strcmp(argv[i], "--workers") == 0) && i + 1 < argc) {
       workers = std::stoi(argv[++i]);
+    } else if (std::strcmp(argv[i], "--ablation-precision") == 0) {
+      ablation_precision = true;
     }
   }
 
@@ -53,6 +61,11 @@ int main(int argc, char *argv[]) {
     print_usage();
     return 1;
   }
+
+  if (precision < 8)
+    precision = 8;
+  if (precision > 20)
+    precision = 20;
 
   try {
     if (command == "compress") {
@@ -79,6 +92,7 @@ int main(int argc, char *argv[]) {
       opts.precision_bits = precision;
       opts.chunk_size = chunk_size;
       opts.num_workers = workers;
+      opts.enforce_error_bound = !ablation_precision;
 
       dlc::compress(data.data(), n, output_path, opts);
       std::cout << "Compressed to " << output_path << "\n";

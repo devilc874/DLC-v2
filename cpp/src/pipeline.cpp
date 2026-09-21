@@ -93,7 +93,8 @@ std::vector<uint8_t> process_block(const double *data, size_t n,
 
       // Adaptive precision
       int effective_precision =
-          select_precision(model.residuals, config.precision_bits);
+          select_precision(model.residuals, config.precision_bits,
+                           config.enforce_error_bound, config.max_error_bound);
       meta.precision_bits = static_cast<uint8_t>(effective_precision);
 
       auto quantized = quantize(model.residuals, effective_precision);
@@ -117,7 +118,9 @@ std::vector<uint8_t> process_block(const double *data, size_t n,
     std::vector<double> block_residuals(n);
     for (size_t i = 0; i < n; ++i) block_residuals[i] = data[i] - block_mean;
 
-    int block_precision = select_precision(block_residuals, config.precision_bits);
+    int block_precision =
+        select_precision(block_residuals, config.precision_bits,
+                         config.enforce_error_bound, config.max_error_bound);
     auto block_quantized = quantize(block_residuals, block_precision);
     auto dod_encoded = encode_dod(block_quantized);
 

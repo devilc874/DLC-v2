@@ -20,20 +20,44 @@ import numpy as np
 from typing import List, Tuple
 
 # ── Constants ────────────────────────────────────────────────────────────────
-DEFAULT_PRECISION    = 12
+DEFAULT_PRECISION    = 16
 MIN_PRECISION        = 8
 MAX_PRECISION        = 20
 MAD_OUTLIER_FACTOR   = 4.5    # was 6.0 — more aggressive outlier capture
-MAX_ERROR_BOUND      = 8e-6   # strict per-sample error constraint
+MAX_ERROR_BOUND      = 8e-6   # production error contract → 16-bit floor
 
 
 # ── Adaptive Precision ───────────────────────────────────────────────────────
 
-def select_precision(residuals: np.ndarray,
-                     requested: int = DEFAULT_PRECISION) -> int:
+def precision_floor_for_error_bound(max_error_bound: float = MAX_ERROR_BOUND) -> int:
     """
-    Choose optimal precision bits for this window's residuals.
-    Fewer bits for well-fitted windows → smaller quantized integers → better compression.
+    Bits required so quantization error 2^(-(p+1)) <= max_error_bound.
+    For the default 8e-6 contract this evaluates to 16.
+    """
+    import math
+    if max_error_bound <= 0:
+        return MAX_PRECISION
+    return max(MIN_PRECISION,
+               int(math.ceil(math.log2(1.0 / max_error_bound) - 1)))
+
+
+def select_precision(residuals: np.ndarray,
+                     requested: int = DEFAULT_PRECISION,
+                     *,
+                     enforce_error_bound: bool = True,
+                     max_error_bound: float = MAX_ERROR_BOUND) -> int:
+    """
+    Choose precision bits for this window's residuals.
+
+    Always adapts between a floor and the requested cap:
+        p* = min(20, max(p_floor, min(p_req, p_adapt)))
+
+    Default (enforce_error_bound=True):
+        p_floor = 16 (from 8e-6 error contract). Adaptive range is typically
+        16–20 (or 8 for near-zero residuals).
+
+    Ablation (enforce_error_bound=False):
+        p_floor = 8, so sweeping / adapting over the full 8–20 range is possible.
     """
     import math
 
@@ -42,17 +66,19 @@ def select_precision(residuals: np.ndarray,
     if max_abs < 1e-15:
         return MIN_PRECISION  # near-zero residuals
 
-    # Minimum precision for error bound
-    min_p_for_bound = max(MIN_PRECISION,
-                          math.ceil(math.log2(1.0 / MAX_ERROR_BOUND) - 1))
+    if enforce_error_bound:
+        min_p_for_bound = precision_floor_for_error_bound(max_error_bound)
+    else:
+        min_p_for_bound = MIN_PRECISION
 
     # Adaptive: smaller residuals need fewer bits
     if max_abs < 1.0:
         adaptive_p = max(MIN_PRECISION,
                          int(math.ceil(-math.log2(max_abs + 1e-30))) + 4)
     else:
-        adaptive_p = DEFAULT_PRECISION
+        adaptive_p = max(requested, DEFAULT_PRECISION)
 
+    requested = int(max(MIN_PRECISION, min(MAX_PRECISION, requested)))
     precision = min(MAX_PRECISION, max(min_p_for_bound, min(requested, adaptive_p)))
     return precision
 

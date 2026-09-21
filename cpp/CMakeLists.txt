@@ -28,10 +28,26 @@ add_library(dlc_lib STATIC
 target_include_directories(dlc_lib PUBLIC include)
 target_link_libraries(dlc_lib PRIVATE ZLIB::ZLIB)
 
+# ── Static linking (portable exe, no DLLs needed) ────────────────────────────
+if(MINGW)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+    # Use the static zlib (.a) instead of the dynamic one (.dll.a)
+    set(ZLIB_USE_STATIC_LIBS ON)
+    find_library(ZLIB_STATIC_LIB libz.a PATHS "${CMAKE_PREFIX_PATH}/lib" NO_DEFAULT_PATH)
+    if(NOT ZLIB_STATIC_LIB)
+        find_library(ZLIB_STATIC_LIB libz.a)
+    endif()
+endif()
+
 # ── CLI Executable ───────────────────────────────────────────────────────────
 add_executable(dlc_exe src/main.cpp)
 set_target_properties(dlc_exe PROPERTIES OUTPUT_NAME dlc)
-target_link_libraries(dlc_exe PRIVATE dlc_lib ZLIB::ZLIB)
+if(MINGW AND ZLIB_STATIC_LIB)
+    target_link_libraries(dlc_exe PRIVATE dlc_lib ${ZLIB_STATIC_LIB})
+    target_link_options(dlc_exe PRIVATE -static -static-libgcc -static-libstdc++)
+else()
+    target_link_libraries(dlc_exe PRIVATE dlc_lib ZLIB::ZLIB)
+endif()
 
 # ── Testing (GTest via FetchContent) ─────────────────────────────────────────
 include(FetchContent)

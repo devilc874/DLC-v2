@@ -36,33 +36,99 @@ Conduct comprehensive benchmarking against **five industry-standard compression 
 
 ## 3. Individual Project Objectives (Team Member Contributions)
 
-### Team Member 1: Compression Algorithm & Model Design
+### Team Member 1: Adaptive Block Dispatch and Variance-Guided Segmentation
 
-- **Contribution to Objective 1:** Design and implement the six predictive models — Linear Regression (closed-form least squares), Quadratic Regression (3×3 normal equations), XOR-Delta (bitwise float64 XOR), Constant (mean-based), Sinusoidal (FFT frequency estimation + Gauss-Newton refinement), and Predictive XOR (linear extrapolation predictor). Implement the model selection logic with SSR-based evaluation, constant preference rules, and XOR preference thresholds.
-- **Contribution to Objective 2:** Port all six model implementations to C++17, including a custom O(n) Discrete Fourier Transform for sinusoidal frequency estimation and a 4×4 Gaussian elimination solver for Gauss-Newton optimization — without external dependencies (no FFTW, no LAPACK).
-- **Contribution to Objective 3:** Define the model parameter storage format within window blocks (variable-length based on model ID: 1–4 parameters per model).
-- **Contribution to Objective 4:** Analyze per-model selection frequency across datasets to validate that new models (Constant, Sinusoidal, Pred-XOR) are being selected where appropriate and improving compression ratios.
+**Module Summary:** Responsible for the first two stages of the compression pipeline — partitioning the raw float64 stream into fixed blocks for parallel dispatch, and segmenting each block into statistically homogeneous windows using a variance-guided algorithm.
 
-### Team Member 2: Encoding Strategies & Adaptive Precision
+- **Contribution to Objective 1 (Block Chunking):** Partition the float64 stream into fixed 100,000-sample blocks for parallel dispatch. Workers may finish in any order; outputs are reassembled in deterministic block-index order using an index-keyed reassembly buffer, ensuring byte-identical compressed output regardless of thread count or completion order.
+- **Contribution to Objective 1 (Variance-Guided Windowing):** Implement the adaptive segmentation algorithm using Welford's (1962) single-pass numerically-stable variance update — avoiding catastrophic cancellation in the textbook `E[x²] − E[x]²` formula on large sensor values that are close together. Window sizes grow via greedy doubling search (16 → 32 → 64 → …) with binary refinement while `σ²(W) ≤ T = max(σ²_init·10, σ²_global·0.10)`, capped at 4,096 samples. A stagnation guard aborts expansion on variance jumps > 1.5×.
+- **Contribution to Objective 1 (Constant Fast Path):** Implement a constant-region fast path that emits the entire block as a single window when `σ²_global < 10⁻²⁰`, providing a cheap escape hatch for genuinely flat signal regions.
+- **Contribution to Objective 2:** Port the windowing algorithm and block dispatch logic to C++17 with identical segmentation behavior. Implement the deterministic dispatch contract in C++ using `std::async` with index-keyed ordering.
 
-- **Contribution to Objective 1:** Implement all five residual encoding strategies — Zigzag-Varint encoding, Fixed-Width Bitpacking, Delta-of-Residuals, MAD Outlier Separation (with complete encoder and decoder, tuned MAD factor of 4.5), and RLE (Run-Length Encoding). Implement the trial-encode mechanism that compresses with all five strategies and selects the smallest output. Develop XOR residual encoding with optional delta-of-XOR compression for XOR-based models.
-- **Contribution to Objective 1:** Design and implement the adaptive precision system (8–20 bits per window) based on residual magnitude analysis, ensuring the error bound is maintained while minimizing encoded size.
-- **Contribution to Objective 2:** Port all encoding strategies, quantization, dequantization, and adaptive precision selection to C++17 with identical behavior.
+**Module Outputs:**
+
+| Metric | Value |
+|---|---|
+| Window-size range | 16 – 4,096 samples |
+| Block size | B = 100,000 samples |
+| Variance algorithm | Welford (1962) |
+| Stagnation threshold | 1.5× |
+
+**Source Files:** `python/dlc/pipeline.py`, `python/dlc/windowing.py`, `cpp/src/pipeline.cpp`, `cpp/src/windowing.cpp`
+
+---
+
+### Team Member 2: Entropy Tournament and Adaptive Precision Controller
+
+**Module Summary:** Responsible for the residual encoding stage — designing and implementing the six competing encoding strategies, the trial-encode tournament mechanism, and the adaptive per-window precision controller that enforces the strict error bound.
+
+- **Contribution to Objective 1 (Encoding Strategies):** Implement all six residual encoding strategies, trial-encoded in parallel per window — Zigzag-Varint, Fixed-Width Bitpack, Delta-of-Residuals, MAD Outlier Separation (tuned MAD factor of 4.5 with complete encoder/decoder), Run-Length Encoding, and Delta-of-Delta. The smallest byte string wins the tournament. Including Delta-of-Delta makes DLC a strict superset of the InfluxDB/Prometheus timestamp encoder (DoD-superset claim verified empirically: DoD wins on 18 of 21 datasets in the benchmark suite).
+- **Contribution to Objective 1 (Adaptive Precision):** Design and implement the adaptive precision controller (8–20 bits per window). Per-window precision floats with a strict floor of `p_floor = 16`, enforcing `|error| ≤ 8 × 10⁻⁶`. Smooth windows may drop to 8 bits while noisy windows pay the full 16-bit cost. Precision floor derivation: `max_err = 2⁻¹⁷ ≈ 7.6 × 10⁻⁶` at 16-bit precision, rounded up to `8 × 10⁻⁶` as the conservative contract.
+- **Contribution to Objective 1 (XOR Encoding):** Develop XOR residual encoding with optional delta-of-XOR compression for XOR-based models (XOR-Delta and Pred-XOR).
+- **Contribution to Objective 2:** Port all encoding strategies, quantization, dequantization, and adaptive precision selection to C++17 with byte-identical output. Cross-language byte equivalence verified: Python and C++ entropy outputs are byte-identical for every strategy on closed-form residuals.
 - **Contribution to Objective 4:** Measure encoding strategy selection frequency and per-strategy compression efficiency across datasets.
 
-### Team Member 3: Pipeline Architecture, Parallelism & File Format
+**Module Outputs:**
 
-- **Contribution to Objective 1:** Design the five-stage pipeline architecture — block chunking (100,000 samples), parallel dispatch, per-block processing (segment → model → encode → pack), ordered result assembly, and final zlib compression.
-- **Contribution to Objective 2:** Implement the parallel pipeline in C++17 using `std::async` with `std::launch::async` policy for true multi-core utilization. Implement the adaptive variance-guided windowing algorithm with adaptive maximum window size (512/1024/4096 based on block size), stagnation guard, and constant-block fast-path. Port the complete decompression path including explicit signal reconstruction for all six model types.
-- **Contribution to Objective 3:** Design and implement the complete `.dlc` binary format — 64-byte header serialization, 7-byte window block headers (including per-window precision field), model parameter packing, footer with CRC-32, and zlib integration. Ensure byte-for-byte compatibility between Python and C++ format implementations.
-- **Contribution to Objective 4:** Conduct cross-language round-trip verification tests (Python compress → C++ decompress, and vice versa).
+| Metric | Value |
+|---|---|
+| Strict error bound | \|error\| ≤ 8 × 10⁻⁶ |
+| Precision range | 8 – 20 bits |
+| Encoding strategies | 6 (parallel tournament) |
+| DoD wins | 18 of 21 datasets |
 
-### Team Member 4: Benchmarking, Visualization & Interactive Dashboard
+**Source Files:** `python/dlc/encoders.py`, `cpp/src/encoders.cpp`
 
-- **Contribution to Objective 4:** Develop automated benchmark scripts that dynamically measure GZIP, ZLIB, and DLC compression ratios and throughput across all datasets. Generate presentation-quality charts using Matplotlib — grouped bar charts with logarithmic axes for ratio comparison, throughput scaling charts demonstrating the GIL bottleneck vs C++ parallelism, and signal overlay plots showing model predictions against original data with windowing boundaries.
-- **Contribution to Objective 4:** Build the interactive Streamlit web dashboard featuring dataset selection, real-time compression analysis, ratio comparison charts, round-trip verification with error display, and signal preview visualization.
-- **Contribution to Objective 4:** Create and curate the test dataset collection — synthetic waveforms (sine, ramp, random walk, noisy multi-frequency sine, step functions, edge cases), real-world NAB datasets (AWS EC2 CPU, machine temperature, NYC taxi demand), and large-scale climate datasets (Jena Climate 420K-point temperature and pressure records).
-- **Contribution to Objective 1:** Develop the command-line interface for both Python and C++ engines with support for **precision bits** (8-20, configurable via `--precision` flag), chunk size, and worker count configuration. Users can select lossless-like (20-bit), standard (16-bit), or aggressive (8-bit) compression directly from the terminal.
+---
+
+### Team Member 3: Predictive Models and SSR-Based Selector
+
+**Module Summary:** Responsible for designing and implementing the six predictive models that capture the mathematical structure of each signal window, and the SSR-based model selector that chooses the optimal model per window.
+
+- **Contribution to Objective 1 (Six Predictive Models):** Design and implement six predictive models, fitted in parallel per window — Linear Regression (closed-form least squares), Quadratic Regression (Cramer's rule on a 3×3 normal equation system), XOR-Delta (lossless bitwise float64 XOR), Constant (mean-based, 1 parameter), Sinusoidal (FFT-seeded Levenberg–Marquardt / Gauss-Newton refinement with 4 parameters: A, ω, φ, dc), and Predictive-XOR (lossless linear extrapolation predictor with 2 anchors).
+- **Contribution to Objective 1 (SSR-Based Selector):** Implement the model selector using Sum-of-Squared-Residuals (SSR) minimization with tie-break rules. Minimum SSR wins; ties within 1% favor (a) the simpler model (fewer parameters) and (b) the lossless variant (XOR-based). Empirical validation: SSR-best model agrees with size-best model on all 21 benchmark datasets.
+- **Contribution to Objective 1 (Edge Case Routing):** Implement NaN / ±Inf / subnormal detection at window scan; XOR-Delta is forced for those windows since it is the only safe lossless option that handles non-finite IEEE 754 values.
+- **Contribution to Objective 2:** Port all six model implementations to C++17 — including a custom O(n) Discrete Fourier Transform for sinusoidal frequency estimation and a 4×4 Gaussian elimination solver for Gauss-Newton optimization, without external dependencies (no FFTW, no LAPACK). Five models are closed-form and produce byte-identical output across Python and C++; Sinusoidal is iterative and guarantees cross-decode within the error envelope.
+- **Contribution to Objective 3:** Define the model parameter storage format within window blocks (variable-length based on model ID: 1–4 parameters per model).
+- **Contribution to Objective 4:** Analyze per-model selection frequency across datasets to validate that all models are being selected where appropriate and improving compression ratios.
+
+**Module Outputs:**
+
+| Metric | Value |
+|---|---|
+| Models per window | 6 (parallel fit) |
+| Closed-form / Iterative | 5 / 1 |
+| Tie-break rule | Simpler / lossless wins |
+| SSR-vs-size agreement | 21 / 21 datasets |
+
+**Source Files:** `python/dlc/models.py`, `cpp/src/models.cpp`
+
+---
+
+### Team Member 4: C++17 Production Engine, Benchmarking & Cross-Language Verification
+
+**Module Summary:** Responsible for the C++17 production engine port, the cross-platform build system, the complete test suite, the interactive Streamlit dashboard, automated benchmarking against industry standards, and the command-line interface.
+
+- **Contribution to Objective 2 (C++17 Engine):** Implement the full C++17 production engine using `std::async` dispatch with explicit `std::future` ordering loop. Bypasses the Python GIL entirely; sustains 30–130 MB/s throughput on smooth data; produces deterministic output across thread counts. Memory footprint kept under 16 MB.
+- **Contribution to Objective 3 (.dlc Binary I/O):** Implement the complete `.dlc` binary format — 64-byte header (magic, version, sample count, block size, default precision), zlib-deflated payload, 8-byte CRC-32 footer. All values stored little-endian on disk with static assertions at build time. Ensure byte-for-byte compatibility between Python and C++ format implementations.
+- **Contribution to Objective 3 (Cross-Language Contract):** Establish and verify the cross-language byte-identity contract — closed-form models produce byte-identical `.dlc` files in Python and C++; iterative Sinusoidal cross-decodes within the strict error envelope.
+- **Contribution to Objective 4 (Test Suite):** Build and maintain a 108-test continuous-integration suite — 29 GoogleTest C++ tests + 79 pytest Python tests covering format round-trip, windowing, model fitting, encoding strategies, pipeline determinism, codec file I/O, cross-language compatibility, and Hypothesis property-based fuzz testing.
+- **Contribution to Objective 4 (Benchmarking):** Develop automated benchmark scripts comparing DLC against five industry techniques (Gorilla, Delta-of-Delta, RLE, GZIP, ZLIB) with round-trip error analysis and fair 16-bit evaluation. Generate presentation-quality charts using Matplotlib — grouped bar charts with logarithmic axes, throughput scaling charts, and signal overlay plots.
+- **Contribution to Objective 4 (Dashboard):** Build the interactive Streamlit web dashboard (5 tabs) featuring dataset selection, real-time compression, industry comparison with fairness notes, batch analysis with error tables, round-trip verification, and signal preview visualization using Plotly.
+- **Contribution to Objective 4 (Datasets):** Create and curate the test dataset collection — synthetic waveforms (sine, ramp, random walk, noisy multi-frequency sine, step functions, edge cases), real-world NAB datasets (AWS EC2 CPU, machine temperature, NYC taxi demand), large-scale climate datasets (Jena Climate 420K-point), and 3M-sample industrial sensor simulations.
+- **Contribution to Objective 4 (CLI):** Develop the command-line interface for both Python and C++ engines with support for **precision bits** (8–20, configurable via `--precision` flag), chunk size, and worker count configuration. Users can select near-lossless (20-bit), standard (16-bit), or aggressive (8-bit) compression directly from the terminal.
+- **Contribution to Objective 2 (Build System):** Implement a cross-platform CMake build — single `CMakeLists.txt` drives macOS Apple Silicon, Linux x86, and Windows MinGW builds; zlib linked at compile time; GoogleTest fetched via CMake FetchContent.
+
+**Module Outputs:**
+
+| Metric | Value |
+|---|---|
+| C++ Throughput | 30 – 130 MB/s |
+| CI test suite | 108 / 108 pass |
+| OS targets | macOS / Linux / Windows |
+| Memory footprint | < 16 MB |
+
+**Source Files:** `cpp/CMakeLists.txt`, `cpp/src/codec.cpp`, `cpp/src/format.cpp`, `cpp/tests/*` (29 tests), `python/tests/*` (79 tests), `python/app.py`, `python/benchmarks/*`
 
 ---
 
@@ -114,5 +180,5 @@ Conduct comprehensive benchmarking against **five industry-standard compression 
 
 *This document serves as the capstone project proposal and planning reference for the DLC v2 Delta-Linear Compression Engine.*
 
-> **Last updated:** 2026-04-15  
+> **Last updated:** 2026-05-10  
 > **Engine status:** 6 models, 6 encoders, block-level DoD fast path, configurable precision (8-20 bits via `--precision`), 80% industry win rate at equal precision.

@@ -1,0 +1,22 @@
+﻿Dataset,Gorilla,DoD (12-bit),DoD (16-bit),RLE,GZIP,ZLIB,DLC v2
+massive_sensor_3m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+noisy_ramp_100k,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+ramp_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+random_walk_50k,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+real_ambient_temp_7k,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+real_cpu_4k,0 (exact),1.21e-04,7.57e-06,0 (exact),0 (exact),0 (exact),7.62e-06
+real_ec2_network_4k,0 (exact),9.77e-05,6.10e-06,0 (exact),0 (exact),0 (exact),6.94e-06
+real_jena_pressure_420k,0 (exact),1.17e-04,7.32e-06,0 (exact),0 (exact),0 (exact),7.51e-06
+real_jena_temperature_420k,0 (exact),1.17e-04,7.32e-06,0 (exact),0 (exact),0 (exact),7.59e-06
+real_machine_temp_22k,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+real_nyc_taxi_10k,0 (exact),0 (exact),0 (exact),0 (exact),0 (exact),0 (exact),1.87e-06
+real_twitter_vol_15k,0 (exact),0 (exact),0 (exact),0 (exact),0 (exact),0 (exact),1.92e-06
+sine_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_heartbeat_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_industrial_ramp_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_lorenz_0m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_noisy_sine_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_random_walk_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+synthetic_vibration_1m,0 (exact),1.22e-04,7.63e-06,0 (exact),0 (exact),0 (exact),7.63e-06
+test_recovered,0 (exact),1.22e-04,0 (exact),0 (exact),0 (exact),0 (exact),2.21e-08
+test_rt_rec,0 (exact),1.22e-04,7.29e-06,0 (exact),0 (exact),0 (exact),2.64e-08

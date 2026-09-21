@@ -62,7 +62,21 @@ output/*.png
 Thumbs.db
 desktop.ini
 
+# ── LaTeX Artifacts ───────────────────────────────────────────
+*.aux
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# ── Archives ──────────────────────────────────────────────────
+capstonev2.zip
+
 # ── OS Files ──────────────────────────────────────────────────
 *.tmp
 *.log
 *.bak
+

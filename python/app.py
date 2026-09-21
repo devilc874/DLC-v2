@@ -989,6 +989,7 @@ def main():
 
                 fair_rows.append({
                     "Dataset": name,
+                    "Samples": f"{os.path.getsize(bins[name]) // 8:,}",
                     "Gorilla": f"{gorilla_ratio:.1f}x" if gorilla_ratio > 0 else "--",
                     "DoD (16-bit)": f"{dod_fair_ratio:.1f}x" if dod_fair_ratio > 0 else "--",
                     "RLE": f"{rle_ratio:.1f}x" if rle_ratio > 0 else "--",

@@ -1,0 +1,16 @@
+﻿Dataset,Samples,Gorilla,Delta-of-Delta,RLE,GZIP,ZLIB,SZ3,ZFP,Elf,ALP,DLC v2,Winner
+edge_cases_100,100,17.0x,7.5x,9.5x,17.0x,22.9x,--,--,17.0x,1.0x,8.1x,ZLIB
+noisy_ramp_100k,"100,000",1.0x,5.3x,0.7x,1.3x,1.3x,--,--,1.0x,1.0x,4.4x,Delta-of-Delta
+ramp_1m,"1,000,000",1.0x,8.0x,0.7x,1.4x,1.4x,--,--,1.0x,1.0x,2355.7x,>> DLC v2
+random_walk_50k,"50,000",1.0x,3.7x,0.7x,1.1x,1.1x,--,--,1.0x,1.0x,3.0x,Delta-of-Delta
+real_ambient_temp_7k,"7,267",1.2x,3.7x,0.7x,1.1x,1.1x,--,--,1.2x,1.0x,2.9x,Delta-of-Delta
+real_cpu_4k,"4,032",1.2x,2.9x,0.7x,2.8x,2.8x,--,--,1.2x,1.0x,3.0x,>> DLC v2
+real_ec2_network_4k,"4,730",1.2x,2.5x,0.7x,7.8x,8.5x,--,--,1.2x,3.7x,5.7x,ZLIB
+real_machine_temp_22k,"22,695",1.1x,3.5x,0.7x,1.1x,1.1x,--,--,1.1x,1.0x,2.9x,Delta-of-Delta
+real_nyc_taxi_10k,"10,320",3.6x,2.1x,0.7x,2.9x,2.9x,--,--,3.6x,2.9x,3.4x,Gorilla
+real_twitter_vol_15k,"15,902",4.3x,2.7x,0.7x,5.4x,5.5x,--,--,4.3x,6.0x,5.6x,ALP
+sine_1m,"1,000,000",1.0x,8.0x,0.7x,1.1x,1.1x,--,--,1.0x,1.0x,217.2x,>> DLC v2
+small_200,200,1.0x,7.7x,0.7x,1.3x,1.4x,--,--,1.0x,1.0x,8.9x,>> DLC v2
+step_10k,"10,000",63.4x,8.0x,3333.3x,493.8x,533.3x,--,--,63.4x,7.8x,547.9x,RLE
+synthetic_noisy_sine_1m,"1,000,000",1.2x,3.1x,0.7x,1.1x,1.1x,--,--,1.2x,1.0x,3.2x,>> DLC v2
+synthetic_random_walk_1m,"1,000,000",1.0x,3.7x,0.7x,1.1x,1.1x,--,--,1.0x,1.0x,3.0x,Delta-of-Delta

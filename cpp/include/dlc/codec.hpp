@@ -12,9 +12,12 @@
 namespace dlc {
 
 struct CompressOptions {
-  int precision_bits = 12;
+  int precision_bits = 16;
   uint32_t chunk_size = 100000;
   int num_workers = 0; // 0 = auto
+  // When false, skips the 16-bit error-bound floor (ablation / 8–20 sweep).
+  bool enforce_error_bound = true;
+  double max_error_bound = 8e-6;
 };
 
 /**

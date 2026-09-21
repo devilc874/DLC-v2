@@ -82,6 +82,8 @@ void compress(const double *data, size_t n, const std::string &output_path,
   config.precision_bits = opts.precision_bits;
   config.chunk_size = opts.chunk_size;
   config.num_workers = opts.num_workers;
+  config.enforce_error_bound = opts.enforce_error_bound;
+  config.max_error_bound = opts.max_error_bound;
 
   // Compress
   auto payload = compress_parallel(data, n, config);

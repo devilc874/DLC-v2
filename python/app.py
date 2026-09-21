@@ -5,9 +5,10 @@ Launch:
     pip install plotly  (if not installed)
     streamlit run python/app.py
 
-Features:
+FEATURES:
   - Dynamic Plotly charts (zoom, hover, pan)
   - Industry comparison (Gorilla, DoD, RLE, GZIP, ZLIB vs DLC)
+  - Newer compressors (SZ3, ZFP, Elf, ALP) in the same charts/tables
   - Signal analysis with windowing preview
   - Batch comparison across ALL datasets
   - All 6 models & 5 encoders explained
@@ -39,6 +40,24 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
 TEST_DATA_DIR = os.path.join(PROJECT_ROOT, 'test_data')
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, 'output')
+BENCHMARKS_DIR = os.path.join(SCRIPT_DIR, 'benchmarks')
+if BENCHMARKS_DIR not in sys.path:
+    sys.path.insert(0, BENCHMARKS_DIR)
+
+# Newer compressors (same wrappers used by compare_sota.py)
+try:
+    from baselines import (
+        compress_sz3, compress_zfp, compress_elf, compress_alp,
+        probe_availability, abs_error_stats,
+    )
+    HAS_SOTA = True
+except ImportError:
+    HAS_SOTA = False
+    def probe_availability():
+        return {"SZ3": False, "ZFP": False, "Elf": False, "ALP": False}
+
+# Equal absolute error for near-lossless methods (matches paper / DLC contract figure)
+SOTA_ABS_ERROR = 8e-6
 
 # ── Color Palette ─────────────────────────────────────────────────────────
 
@@ -60,7 +79,45 @@ COLORS = {
     'gorilla': '#bc8cff',
     'dod': '#39d2c0',
     'rle': '#f778ba',
+    'sz3': '#ffa657',
+    'zfp': '#79c0ff',
+    'elf': '#56d364',
+    'alp': '#e3b341',
 }
+
+TECH_COLORS = {
+    'DLC v2': COLORS['dlc'],
+    'GZIP': COLORS['gzip'],
+    'ZLIB': COLORS['zlib'],
+    'Gorilla': COLORS['gorilla'],
+    'Delta-of-Delta': COLORS['dod'],
+    'RLE': COLORS['rle'],
+    'SZ3': COLORS['sz3'],
+    'ZFP': COLORS['zfp'],
+    'Elf': COLORS['elf'],
+    'ALP': COLORS['alp'],
+    'Raw': '#8b949e',
+}
+
+TECH_USED_BY = {
+    'GZIP': 'HTTP, Archives, General',
+    'ZLIB': 'General-purpose',
+    'Gorilla': 'Facebook TSDB, Prometheus',
+    'Delta-of-Delta': 'InfluxDB, Prometheus',
+    'RLE': 'InfluxDB (integers), Embedded',
+    'SZ3': 'Scientific / HPC (error-bounded)',
+    'ZFP': 'LLNL scientific arrays',
+    'Elf': 'Floating-point time series (lossless)',
+    'ALP': 'Analytical DB float columns (lossless)',
+    'DLC v2': 'Our Engine (6 models)',
+}
+
+# Order used in tables / batch charts (legacy + newer)
+ALL_TECHNIQUES = [
+    'Gorilla', 'Delta-of-Delta', 'RLE', 'GZIP', 'ZLIB',
+    'SZ3', 'ZFP', 'Elf', 'ALP', 'DLC v2',
+]
+
 
 PLOTLY_LAYOUT = dict(
     paper_bgcolor='rgba(0,0,0,0)',
@@ -122,11 +179,14 @@ def compress_with_zlib_engine(data_path):
     return len(raw) / len(compressed), elapsed, len(compressed)
 
 
-def compress_with_dlc(binary, data_path, workers=4):
+def compress_with_dlc(binary, data_path, workers=4, precision=16):
     dlc_path = tempfile.mktemp(suffix='.dlc')
     original_size = os.path.getsize(data_path)
     env = _get_env()
-    cmd = [binary, "compress", "-i", data_path, "-o", dlc_path, "--workers", str(workers)]
+    cmd = [
+        binary, "compress", "-i", data_path, "-o", dlc_path,
+        "--workers", str(workers), "--precision", str(precision),
+    ]
     try:
         t0 = time.perf_counter()
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
@@ -384,7 +444,7 @@ def _fmt_err(err):
 
 
 def run_industry_comparison(data, raw_bytes, dlc_binary, data_path, use_fair_dod=False):
-    """Run all industry techniques and return results dict."""
+    """Run all industry + newer techniques and return results dict (same shape as before)."""
     raw_size = len(raw_bytes)
     results = {}
 
@@ -395,9 +455,12 @@ def run_industry_comparison(data, raw_bytes, dlc_binary, data_path, use_fair_dod
         t = time.perf_counter() - t0
         # Extrapolate for full dataset
         ratio_sample = len(data[:min(50000, len(data))]) * 8 / len(g) if len(g) > 0 else 1
-        results['Gorilla'] = {'ratio': ratio_sample, 'time': t, 'size': int(raw_size / ratio_sample)}
+        results['Gorilla'] = {
+            'ratio': ratio_sample, 'time': t,
+            'size': int(raw_size / ratio_sample), 'max_error': 0.0,
+        }
     except Exception:
-        results['Gorilla'] = {'ratio': 1.0, 'time': 0, 'size': raw_size}
+        results['Gorilla'] = {'ratio': 1.0, 'time': 0, 'size': raw_size, 'max_error': 0.0}
 
     # Delta-of-Delta
     try:
@@ -407,36 +470,100 @@ def run_industry_comparison(data, raw_bytes, dlc_binary, data_path, use_fair_dod
         else:
             d = compress_delta_of_delta(data)
         t = time.perf_counter() - t0
-        results['Delta-of-Delta'] = {'ratio': raw_size / len(d), 'time': t, 'size': len(d)}
+        results['Delta-of-Delta'] = {
+            'ratio': raw_size / len(d), 'time': t, 'size': len(d), 'max_error': None,
+        }
     except Exception:
-        results['Delta-of-Delta'] = {'ratio': 1.0, 'time': 0, 'size': raw_size}
+        results['Delta-of-Delta'] = {'ratio': 1.0, 'time': 0, 'size': raw_size, 'max_error': None}
 
     # RLE
     try:
         t0 = time.perf_counter()
         r = compress_rle_float(data)
         t = time.perf_counter() - t0
-        results['RLE'] = {'ratio': raw_size / len(r), 'time': t, 'size': len(r)}
+        results['RLE'] = {'ratio': raw_size / len(r), 'time': t, 'size': len(r), 'max_error': 0.0}
     except Exception:
-        results['RLE'] = {'ratio': 1.0, 'time': 0, 'size': raw_size}
+        results['RLE'] = {'ratio': 1.0, 'time': 0, 'size': raw_size, 'max_error': 0.0}
 
     # GZIP
     t0 = time.perf_counter()
     gz = gzip.compress(raw_bytes, compresslevel=6)
     t = time.perf_counter() - t0
-    results['GZIP'] = {'ratio': raw_size / len(gz), 'time': t, 'size': len(gz)}
+    results['GZIP'] = {'ratio': raw_size / len(gz), 'time': t, 'size': len(gz), 'max_error': 0.0}
 
     # ZLIB
     t0 = time.perf_counter()
     zl = zlib.compress(raw_bytes, level=9)
     t = time.perf_counter() - t0
-    results['ZLIB'] = {'ratio': raw_size / len(zl), 'time': t, 'size': len(zl)}
+    results['ZLIB'] = {'ratio': raw_size / len(zl), 'time': t, 'size': len(zl), 'max_error': 0.0}
+
+    # ── Newer compressors (always run — same as Gorilla/GZIP) ───────────
+    if HAS_SOTA:
+        # SZ3
+        try:
+            sz = compress_sz3(data, abs_error=SOTA_ABS_ERROR)
+            max_e, _, _ = abs_error_stats(data, sz.recovered)
+            results['SZ3'] = {
+                'ratio': raw_size / sz.compressed_size if sz.compressed_size else 0,
+                'time': sz.compress_seconds,
+                'size': sz.compressed_size,
+                'max_error': max_e,
+            }
+        except Exception:
+            results['SZ3'] = {'ratio': 0, 'time': 0, 'size': raw_size, 'max_error': None}
+
+        # ZFP
+        try:
+            zfp = compress_zfp(data, abs_error=SOTA_ABS_ERROR)
+            max_e, _, _ = abs_error_stats(data, zfp.recovered)
+            results['ZFP'] = {
+                'ratio': raw_size / zfp.compressed_size if zfp.compressed_size else 0,
+                'time': zfp.compress_seconds,
+                'size': zfp.compressed_size,
+                'max_error': max_e,
+            }
+        except Exception:
+            results['ZFP'] = {'ratio': 0, 'time': 0, 'size': raw_size, 'max_error': None}
+
+        # Elf
+        try:
+            elf = compress_elf(data)
+            max_e, _, _ = abs_error_stats(data, elf.recovered)
+            results['Elf'] = {
+                'ratio': raw_size / elf.compressed_size if elf.compressed_size else 0,
+                'time': elf.compress_seconds,
+                'size': elf.compressed_size,
+                'max_error': max_e,
+            }
+        except Exception:
+            results['Elf'] = {'ratio': 0, 'time': 0, 'size': raw_size, 'max_error': None}
+
+        # ALP
+        try:
+            alp = compress_alp(data)
+            max_e, _, _ = abs_error_stats(data, alp.recovered)
+            results['ALP'] = {
+                'ratio': raw_size / alp.compressed_size if alp.compressed_size else 0,
+                'time': alp.compress_seconds,
+                'size': alp.compressed_size,
+                'max_error': max_e,
+            }
+        except Exception:
+            results['ALP'] = {'ratio': 0, 'time': 0, 'size': raw_size, 'max_error': None}
 
     # DLC
     if dlc_binary and data_path:
         dlc_ratio, dlc_time, dlc_size, _ = compress_with_dlc(dlc_binary, data_path)
         if dlc_ratio:
-            results['DLC v2'] = {'ratio': dlc_ratio, 'time': dlc_time, 'size': dlc_size}
+            dlc_err = None
+            try:
+                dlc_err = roundtrip_dlc_error(dlc_binary, data_path)
+            except Exception:
+                dlc_err = None
+            results['DLC v2'] = {
+                'ratio': dlc_ratio, 'time': dlc_time, 'size': dlc_size,
+                'max_error': dlc_err,
+            }
 
     return results
 
@@ -467,12 +594,7 @@ def _plotly_comparison_bar(results, title="Compression Ratio Comparison"):
         return None
     techs = list(results.keys())
     ratios = [results[t]['ratio'] for t in techs]
-    color_map = {
-        'DLC v2': COLORS['dlc'], 'GZIP': COLORS['gzip'], 'ZLIB': COLORS['zlib'],
-        'Gorilla': COLORS['gorilla'], 'Delta-of-Delta': COLORS['dod'],
-        'RLE': COLORS['rle'],
-    }
-    colors = [color_map.get(t, '#8b949e') for t in techs]
+    colors = [TECH_COLORS.get(t, '#8b949e') for t in techs]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -496,12 +618,7 @@ def _plotly_size_comparison(results, raw_size):
         return None
     techs = ['Raw'] + list(results.keys())
     sizes = [raw_size] + [results[t]['size'] for t in results]
-    color_map = {
-        'Raw': '#8b949e', 'DLC v2': COLORS['dlc'], 'GZIP': COLORS['gzip'],
-        'ZLIB': COLORS['zlib'], 'Gorilla': COLORS['gorilla'],
-        'Delta-of-Delta': COLORS['dod'], 'RLE': COLORS['rle'],
-    }
-    colors = [color_map.get(t, '#8b949e') for t in techs]
+    colors = [TECH_COLORS.get(t, '#8b949e') for t in techs]
     labels = [f'{t}\n{s/1024:.0f} KB' if s < 1e6 else f'{t}\n{s/1e6:.2f} MB' for t, s in zip(techs, sizes)]
 
     fig = go.Figure()
@@ -562,12 +679,9 @@ def _plotly_batch_results(all_results):
         return None
 
     datasets = list(all_results.keys())
-    techniques = ['GZIP', 'ZLIB', 'Delta-of-Delta', 'Gorilla', 'RLE', 'DLC v2']
-    color_map = {
-        'DLC v2': COLORS['dlc'], 'GZIP': COLORS['gzip'], 'ZLIB': COLORS['zlib'],
-        'Gorilla': COLORS['gorilla'], 'Delta-of-Delta': COLORS['dod'],
-        'RLE': COLORS['rle'],
-    }
+    # Only plot techniques that appear in at least one result
+    techniques = [t for t in ALL_TECHNIQUES
+                  if any(t in all_results[ds] for ds in datasets)]
 
     fig = go.Figure()
     for tech in techniques:
@@ -578,16 +692,14 @@ def _plotly_batch_results(all_results):
         if any(r > 0 for r in ratios):
             fig.add_trace(go.Bar(
                 name=tech, x=datasets, y=ratios,
-                marker_color=color_map.get(tech, '#8b949e'),
-                hovertemplate='%{x}<br>' + tech + ': %{y:.1f}×<extra></extra>'
+                marker_color=TECH_COLORS.get(tech, '#8b949e'),
             ))
-
-    fig.update_layout(title='Compression Ratios Across All Datasets',
-                      yaxis_title='Compression Ratio (×)',
-                      barmode='group', height=500,
-                      xaxis_tickangle=-45,
-                      legend=dict(bgcolor='rgba(0,0,0,0)', font=dict(size=11)),
-                      **PLOTLY_LAYOUT)
+    fig.update_layout(
+        barmode='group', title='Compression Ratios Across Datasets',
+        yaxis_title='Ratio (×)', height=450,
+        legend=dict(bgcolor='rgba(0,0,0,0)', orientation='h', y=1.12),
+        **PLOTLY_LAYOUT,
+    )
     return fig
 
 
@@ -676,6 +788,14 @@ def main():
     workers = st.sidebar.slider("🧵 Workers (threads)", 1, 8, 4)
     preview_points = st.sidebar.slider("📈 Preview points", 1000, 50000, 10000, step=1000)
 
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Newer compressors")
+    avail = probe_availability() if HAS_SOTA else {}
+    st.sidebar.caption(
+        f"SZ3: {'native' if avail.get('SZ3_native') else 'built-in'} · "
+        f"ZFP: {'native' if avail.get('ZFP_native') else 'built-in'} · "
+        f"Elf/ALP: built-in"
+    )
     st.sidebar.markdown("---")
     st.sidebar.markdown("""
     <div style='color: #8b949e; font-size: 11px; text-align: center;'>
@@ -767,8 +887,11 @@ def main():
     with tab2:
         st.subheader("🏭 DLC v2 vs Industry Techniques")
         st.markdown("""
-        Compare DLC against real compression techniques used in production time-series databases:
-        **Gorilla** (Facebook), **Delta-of-Delta** (InfluxDB/Prometheus), **RLE**, **GZIP**, **ZLIB**
+        Compare DLC against the same techniques shown before, **plus newer ones**:
+        **Gorilla**, **Delta-of-Delta**, **RLE**, **GZIP**, **ZLIB**,
+        and **SZ3**, **ZFP**, **Elf**, **ALP**.
+
+        Charts and the results table work exactly like before — more columns, same layout.
         """)
 
         if st.button("⚡ Run Industry Comparison", type="primary", use_container_width=True, key="industry_btn"):
@@ -794,30 +917,33 @@ def main():
                 rows = []
                 for tech, r in sorted(results.items(), key=lambda x: -x[1]['ratio']):
                     medal = "🥇" if tech == winner else ""
+                    err = r.get('max_error')
                     rows.append({
                         "": medal,
                         "Technique": tech,
                         "Ratio": f"{r['ratio']:.1f}×",
                         "Compressed": f"{r['size'] / 1024:.1f} KB" if r['size'] < 1e6 else f"{r['size'] / 1e6:.2f} MB",
                         "Time": f"{r['time']:.3f}s",
-                        "Used By": {
-                            'GZIP': 'HTTP, Archives, General',
-                            'ZLIB': 'General-purpose',
-                            'Gorilla': 'Facebook TSDB, Prometheus',
-                            'Delta-of-Delta': 'InfluxDB, Prometheus',
-                            'RLE': 'InfluxDB (integers), Embedded',
-                            'DLC v2': 'Our Engine (6 models)',
-                        }.get(tech, '—')
+                        "Max Error": _fmt_err(err) if err is not None else "—",
+                        "Used By": TECH_USED_BY.get(tech, '—'),
                     })
                 st.dataframe(rows, use_container_width=True, hide_index=True)
 
+                missing = [k for k in ('SZ3', 'ZFP', 'Elf', 'ALP') if k not in results or not results[k].get('ratio')]
+                if missing:
+                    st.warning("Some newer methods failed on this dataset: " + ", ".join(missing))
+                avail = probe_availability() if HAS_SOTA else {}
+                if avail and (not avail.get('SZ3_native') or not avail.get('ZFP_native')):
+                    st.caption(
+                        "SZ3/ZFP are using the built-in Python fallbacks "
+                        "(install `pysz` / `zfpy` for the official libraries)."
+                    )
+
                 st.markdown("### ⚖️ Fairness & Error Note")
                 st.info("""
-                **Delta-of-Delta (DoD)** as normally implemented (12-bit quantization) has an unfair `~1.2e-04` error advantage.
-                
-                To ensure a strict, apples-to-apples comparison on this chart, DoD has been configured with the same **16-bit precision** as **DLC v2**, so both algorithms maintain a strict error bound of `<8e-6`.
-                
-                At this **truly equal precision**, DLC dominates DoD due to its adaptive mathematical models eliminating structural noise rather than just simple differencing!
+                **Delta-of-Delta (DoD)** uses **16-bit** quantization here (same ballpark as DLC).
+                **SZ3** and **ZFP** use absolute error ≈ **8×10⁻⁶** (same figure as the paper).
+                **Gorilla / RLE / GZIP / ZLIB / Elf / ALP** are lossless (error = 0).
                 """)
 
     # ══════════════════════════════════════════════════════════════════════
@@ -924,6 +1050,11 @@ def main():
                 except Exception:
                     errs['DLC v2'] = -1.0
 
+                # Newer methods — reuse max_error already computed in industry run
+                for tech in ('SZ3', 'ZFP', 'Elf', 'ALP'):
+                    if tech in r and r[tech].get('max_error') is not None:
+                        errs[tech] = r[tech]['max_error']
+
                 all_errors[name] = errs
 
             progress.empty()
@@ -931,7 +1062,7 @@ def main():
             # ──────────────────────────────────────────────────────────
             # SECTION 1: Standard Compression Ratios
             # ──────────────────────────────────────────────────────────
-            st.markdown("### 📊 Compression Ratios (Standard — DoD at 12-bit)")
+            st.markdown("### 📊 Compression Ratios (all techniques)")
             rows = []
             dlc_wins = 0
             for name, results in all_results.items():
@@ -939,7 +1070,7 @@ def main():
                 if winner == "DLC v2":
                     dlc_wins += 1
                 row = {"Dataset": name, "Samples": f"{os.path.getsize(bins[name]) // 8:,}"}
-                for tech in ['Gorilla', 'Delta-of-Delta', 'RLE', 'GZIP', 'ZLIB', 'DLC v2']:
+                for tech in ALL_TECHNIQUES:
                     r = results.get(tech, {}).get('ratio', 0)
                     row[tech] = f"{r:.1f}x" if r > 0 else "--"
                 row["Winner"] = f">> DLC v2" if winner == "DLC v2" else winner
@@ -964,43 +1095,64 @@ def main():
             # ──────────────────────────────────────────────────────────
             # SECTION 2: Fair Comparison (DoD at 16-bit = equal to DLC)
             # ──────────────────────────────────────────────────────────
-            st.markdown("### ⚖️ FAIR Comparison — DoD at 16-bit (Equal Precision)")
-            st.info("Here DoD uses **16-bit quantization** (same as DLC). This is the only fair apples-to-apples comparison.")
+            st.markdown("### ⚖️ FAIR Comparison — same error budget where it matters")
+            st.info(
+                "DoD uses **16-bit** (like DLC’s requested cap). "
+                "SZ3/ZFP use abs error ≈ **8×10⁻⁶**. "
+                "Gorilla / RLE / GZIP / ZLIB / Elf / ALP are lossless."
+            )
 
             fair_rows = []
             dlc_fair_wins = 0
             for name, results in all_results.items():
-                dlc_ratio = results.get('DLC v2', {}).get('ratio', 0)
-                dod_fair_ratio = all_fair.get(name, 0)
-                gorilla_ratio = results.get('Gorilla', {}).get('ratio', 0)
-                rle_ratio = results.get('RLE', {}).get('ratio', 0)
-                gzip_ratio = results.get('GZIP', {}).get('ratio', 0)
-                zlib_ratio = results.get('ZLIB', {}).get('ratio', 0)
+                # Prefer ratios already computed in the unified industry run
+                def _r(tech, fallback=0.0):
+                    return results.get(tech, {}).get('ratio', fallback) or 0.0
+
+                dlc_ratio = _r('DLC v2')
+                # DoD fair override (16-bit) when available
+                dod_fair_ratio = all_fair.get(name, 0) or _r('Delta-of-Delta')
 
                 candidates = {
-                    'Gorilla': gorilla_ratio, 'DoD (16-bit)': dod_fair_ratio,
-                    'RLE': rle_ratio, 'GZIP': gzip_ratio, 'ZLIB': zlib_ratio,
+                    'Gorilla': _r('Gorilla'),
+                    'DoD (16-bit)': dod_fair_ratio,
+                    'RLE': _r('RLE'),
+                    'GZIP': _r('GZIP'),
+                    'ZLIB': _r('ZLIB'),
+                    'SZ3': _r('SZ3'),
+                    'ZFP': _r('ZFP'),
+                    'Elf': _r('Elf'),
+                    'ALP': _r('ALP'),
                 }
                 if dlc_ratio > 0:
                     candidates['DLC v2'] = dlc_ratio
+                # Drop empty / missing methods from winner calc
+                candidates = {k: v for k, v in candidates.items() if v and v > 0}
                 fair_winner = max(candidates, key=lambda k: candidates[k]) if candidates else '--'
                 if fair_winner == 'DLC v2':
                     dlc_fair_wins += 1
 
+                def _fmt(v):
+                    return f"{v:.1f}x" if v and v > 0 else "--"
+
                 fair_rows.append({
                     "Dataset": name,
                     "Samples": f"{os.path.getsize(bins[name]) // 8:,}",
-                    "Gorilla": f"{gorilla_ratio:.1f}x" if gorilla_ratio > 0 else "--",
-                    "DoD (16-bit)": f"{dod_fair_ratio:.1f}x" if dod_fair_ratio > 0 else "--",
-                    "RLE": f"{rle_ratio:.1f}x" if rle_ratio > 0 else "--",
-                    "GZIP": f"{gzip_ratio:.1f}x" if gzip_ratio > 0 else "--",
-                    "ZLIB": f"{zlib_ratio:.1f}x" if zlib_ratio > 0 else "--",
-                    "DLC v2": f"{dlc_ratio:.1f}x" if dlc_ratio > 0 else "--",
+                    "Gorilla": _fmt(_r('Gorilla')),
+                    "DoD (16-bit)": _fmt(dod_fair_ratio),
+                    "RLE": _fmt(_r('RLE')),
+                    "GZIP": _fmt(_r('GZIP')),
+                    "ZLIB": _fmt(_r('ZLIB')),
+                    "SZ3": _fmt(_r('SZ3')),
+                    "ZFP": _fmt(_r('ZFP')),
+                    "Elf": _fmt(_r('Elf')),
+                    "ALP": _fmt(_r('ALP')),
+                    "DLC v2": _fmt(dlc_ratio),
                     "Winner": f">> DLC v2" if fair_winner == 'DLC v2' else fair_winner,
                 })
             st.dataframe(fair_rows, use_container_width=True, hide_index=True)
 
-            st.markdown("### Scoreboard (Fair 16-bit)")
+            st.markdown("### Scoreboard (Fair / all techniques)")
             f1, f2, f3 = st.columns(3)
             f1.metric("Total Datasets", len(all_results))
             f2.metric("DLC Wins (Fair)", dlc_fair_wins)
@@ -1024,6 +1176,10 @@ def main():
                     "RLE": _fmt_err(errs.get('RLE')),
                     "GZIP": _fmt_err(errs.get('GZIP')),
                     "ZLIB": _fmt_err(errs.get('ZLIB')),
+                    "SZ3": _fmt_err(errs.get('SZ3')),
+                    "ZFP": _fmt_err(errs.get('ZFP')),
+                    "Elf": _fmt_err(errs.get('Elf')),
+                    "ALP": _fmt_err(errs.get('ALP')),
                     "DLC v2": _fmt_err(errs.get('DLC v2')),
                 })
             st.dataframe(err_rows, use_container_width=True, hide_index=True)
@@ -1107,11 +1263,15 @@ Input: float64[] → [Block Chunking] → [Adaptive Windowing] → [Multi-Model 
 
         st.markdown("### Industry Comparison")
         industry_data = [
-            {"Technique": "Gorilla (Facebook)", "Type": "Lossless", "Approach": "XOR + leading/trailing zero encoding", "Used By": "Facebook TSDB, Prometheus, VictoriaMetrics"},
-            {"Technique": "Delta-of-Delta", "Type": "Near-lossless", "Approach": "Second-order differencing + varint", "Used By": "InfluxDB, Prometheus, TimescaleDB"},
-            {"Technique": "RLE", "Type": "Lossless", "Approach": "Run-length encoding of identical values", "Used By": "InfluxDB (integers), embedded systems"},
-            {"Technique": "GZIP / ZLIB", "Type": "Lossless", "Approach": "LZ77 dictionary + Huffman coding", "Used By": "Everything (HTTP, files, archives)"},
-            {"Technique": "DLC v2 (Ours)", "Type": "Near-lossless", "Approach": "6 predictive models + 5 encoders + adaptive precision", "Used By": "This capstone project"},
+            {"Technique": "Gorilla (Facebook)", "Type": "Lossless", "Approach": "XOR + leading/trailing zero encoding", "Used By": "Facebook TSDB, Prometheus"},
+            {"Technique": "Delta-of-Delta", "Type": "Near-lossless", "Approach": "Second-order differencing + varint", "Used By": "InfluxDB, Prometheus"},
+            {"Technique": "RLE", "Type": "Lossless", "Approach": "Run-length encoding of identical values", "Used By": "InfluxDB (integers), embedded"},
+            {"Technique": "GZIP / ZLIB", "Type": "Lossless", "Approach": "LZ77 dictionary + Huffman coding", "Used By": "HTTP, files, archives"},
+            {"Technique": "SZ3", "Type": "Error-bounded", "Approach": "Prediction + quantization + entropy", "Used By": "Scientific / HPC"},
+            {"Technique": "ZFP", "Type": "Error-bounded", "Approach": "Block transform + fixed accuracy", "Used By": "LLNL scientific arrays"},
+            {"Technique": "Elf", "Type": "Lossless", "Approach": "XOR + bit erasure packing", "Used By": "Floating-point time series"},
+            {"Technique": "ALP", "Type": "Lossless", "Approach": "Factor/exponent → integer encoding", "Used By": "Analytical databases"},
+            {"Technique": "DLC v2 (Ours)", "Type": "Near-lossless", "Approach": "6 predictive models + encoders + adaptive 8–20-bit precision", "Used By": "This project"},
         ]
         st.dataframe(industry_data, use_container_width=True, hide_index=True)
 

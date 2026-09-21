@@ -66,6 +66,16 @@ std::vector<int64_t> decode_residuals(uint8_t encoding_id, const uint8_t *data,
 
 // ── Adaptive precision ─────────────────────────────────────────────────────
 
-int select_precision(const std::vector<double> &residuals, int requested = 12);
+/** Bits required so quantization error 2^(-(p+1)) <= max_error_bound. */
+int precision_floor_for_error_bound(double max_error_bound = 8e-6);
+
+/**
+ * Choose per-window precision (adaptive).
+ * enforce_error_bound=true  → production floor (16 for 8e-6); adapt typically 16–20.
+ * enforce_error_bound=false → ablation; floor at 8 so full 8–20 range is available.
+ */
+int select_precision(const std::vector<double> &residuals, int requested = 16,
+                     bool enforce_error_bound = true,
+                     double max_error_bound = 8e-6);
 
 } // namespace dlc

@@ -36,7 +36,7 @@ class TestHeader:
         assert h2.magic == MAGIC_BYTES
         assert h2.major_version == 0
         assert h2.minor_version == 1
-        assert h2.precision_bits == 12
+        assert h2.precision_bits == 16
         assert h2.chunk_size == 100_000
         assert h2.total_samples == 0
 
